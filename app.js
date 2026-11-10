@@ -512,10 +512,10 @@
     const last = B.entries[B.entries.length - 1] || null;
     const has = k => B.fields.includes(k);
     const lv = k => { for (let i = B.entries.length - 1; i >= 0; i--) if (B.entries[i].v[k] != null) return n1(B.entries[i].v[k]); return ''; };
-    const inp = k => has(k) ? `<label class="fld"><span>${esc(bl(B, k))} <i>${unitOf(B, k)}</i></span><input id="f_${k}" type="text" inputmode="decimal" autocomplete="off" placeholder="${lv(k) ? 'last ' + lv(k) : ''}"></label>` : '';
-    const singles = ['weightKg', 'neck', 'shoulders', 'chest', 'waist', 'hips'];
+    const how = k => B.howTo && B.howTo[k] ? `<em>${esc(B.howTo[k])}</em>` : '';
+    const inp = k => has(k) ? `<label class="fld"><span>${esc(bl(B, k))} <i>${unitOf(B, k)}</i>${how(k)}</span><input id="f_${k}" type="text" inputmode="decimal" autocomplete="off" placeholder="${lv(k) ? 'last ' + lv(k) : ''}"></label>` : '';
     const pairs = S.BODY_PAIRS.filter(([l, r]) => has(l) || has(r));
-    const extra = B.fields.filter(k => !singles.includes(k) && !pairs.some(p => p.includes(k)));
+    const singles = B.fields.filter(k => !pairs.some(p => p.includes(k))); // body.json order (D065)
     const needPass = KEY && KEY.usages && !KEY.usages.includes('encrypt');
     const keySet = !!store.get(GHKEY);
     $('view').innerHTML =
@@ -528,7 +528,7 @@
         (last && last.conditions ? `<div class="chips"><button type="button" class="tchip" id="f_same">Same as last: ${esc(last.conditions)}</button></div>` : '') +
         `<div id="f_exists" class="xnote" hidden></div>` +
       `</section>` +
-      `<section class="card fcard"><div class="g2">${singles.map(inp).join('')}${extra.map(inp).join('')}</div></section>` +
+      `<section class="card fcard"><div class="g2">${singles.map(inp).join('')}</div></section>` +
       `<section class="card fcard">` +
         (has('bicepL') || has('bicepR') ? `<div class="segrow"><span>Biceps measured</span><div class="seg" id="f_bic"><button type="button" data-v="flexed">Flexed</button><button type="button" data-v="relaxed">Relaxed</button></div></div>` : '') +
         pairs.map(([l, r]) => `<div class="g2">${inp(l)}${inp(r)}</div>`).join('') +
@@ -564,6 +564,8 @@
       B.fields.forEach(k => { if ($('f_' + k)) $('f_' + k).value = e.v[k] != null ? e.v[k] : ''; });
     };
     $('f_date').onchange = loadDate; loadDate();
+    // New date: biceps starts as last time (visible, tap to change).
+    if (!byDate[$('f_date').value] && last && last.biceps) setBic(last.biceps);
 
     if ($('k_change')) $('k_change').onclick = () => { $('k_new').hidden = false; $('k_in').focus(); };
     if ($('k_del')) $('k_del').onclick = () => { store.del(GHKEY); renderBodyAdd(); };

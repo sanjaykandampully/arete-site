@@ -180,3 +180,4 @@ table.days tr[data-s] { cursor: pointer; }
 .fmsg { min-height: 20px; font-size: 13.5px; color: var(--muted); margin: 6px 2px; }
 .fmsg.bad { color: var(--over); } .fmsg.warn { color: #e0c36a; } .fmsg.good { color: var(--accent); }
 .fcard .xnote { padding: 0; color: #e0c36a; }
+.fld em { display: block; font-style: normal; color: var(--dim); font-size: 11px; margin-top: 1px; }

@@ -63,7 +63,7 @@
     const goal = b.goal || null;
     const w = latest.weightKg;
     return {
-      fields: b.fields, labels: b.labels || {}, units: b.units, goal, entries,
+      fields: b.fields, labels: b.labels || {}, howTo: b.howTo || {}, units: b.units, goal, entries,
       latest, first,
       toGoalKg: goal && w ? round(goal.weightKg - w.value, 1) : null,
     };
@@ -72,7 +72,7 @@
   // Turns a site summary back into body.json-style entries (the browser only has the summary).
   function bodyFromSummary(s) {
     return {
-      fields: s.fields, labels: s.labels, units: s.units, goal: s.goal,
+      fields: s.fields, labels: s.labels, howTo: s.howTo, units: s.units, goal: s.goal,
       entries: s.entries.map(e => {
         const r = { date: e.date };
         if (e.time) r.time = e.time;
