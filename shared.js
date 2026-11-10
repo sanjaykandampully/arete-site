@@ -9,7 +9,8 @@
   const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const round = (x, d = 1) => { const m = 10 ** d; return Math.round((x + Number.EPSILON) * m) / m; };
   const weekday = d => WD[new Date(d + 'T00:00:00Z').getUTCDay()];
-  const isDate = d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d));
+  // A real calendar date: 2026-02-31 is refused (Date.parse alone accepts it).
+  const isDate = d => { if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false; const t = new Date(d + 'T00:00:00Z'); return !isNaN(t) && t.toISOString().slice(0, 10) === d; };
   const isTime = t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 
   // Limits (D046). The form and validate.js both use these.
