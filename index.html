@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arete">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="robots" content="noindex, nofollow">
+<title>Arete</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="app.css?v=mway1n5v">
+</head>
+<body>
+<div id="lock" class="lock" hidden>
+  <form id="lockForm" class="lock-box" autocomplete="off">
+    <div class="brand">Arete</div>
+    <input id="pass" type="password" inputmode="text" placeholder="Passphrase" aria-label="Passphrase" autocomplete="current-password">
+    <button type="submit">Unlock</button>
+    <div id="lockMsg" class="lock-msg"></div>
+  </form>
+</div>
+<div id="app" hidden>
+  <header class="top">
+    <button id="back" class="icon" aria-label="Back" style="visibility:hidden">&#8249;</button>
+    <div class="brand">Arete</div>
+    <button id="lockBtn" class="ghost" aria-label="Lock">Lock</button>
+  </header>
+  <nav id="tabs" class="tabs"><button data-v="month">Month</button><button data-v="week">Week</button><button data-v="range">Range</button><button data-v="body">Body</button><button data-v="train">Training</button></nav>
+  <main id="view"></main>
+</div>
+<script src="vendor/chart.umd.min.js"></script>
+<script src="app.js?v=mway1n5v"></script>
+</body>
+</html>
