@@ -8,6 +8,8 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
   };
   let DATA = null, DATES = [];
+  let KEY = null, ENV = null; // the unlocked AES key and the envelope it opened (needed to save from the app, D059)
+  let FLASH = '';
   let charts = [];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -44,7 +46,8 @@
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
     return crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64d(env.salt), iterations: env.iter }, base, 256);
   }
-  const aesKey = bits => crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['decrypt']);
+  // encrypt too: the Add form re-encrypts the site data after a save (D059).
+  const aesKey = bits => crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['encrypt', 'decrypt']);
   async function decrypt(key, env) {
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(env.iv) }, key, b64d(env.ct));
     return JSON.parse(new TextDecoder().decode(pt));
@@ -75,7 +78,8 @@
     } catch (e) { document.body.textContent = 'Could not load data.'; return; }
     if (!window.crypto || !crypto.subtle) { document.body.textContent = 'This browser cannot unlock Arete.'; return; }
     const saved = await recall();
-    if (saved) { try { return opened(await decrypt(saved, env)); } catch (e) { await forget(); } }
+    ENV = env;
+    if (saved) { try { const d = await decrypt(saved, env); KEY = saved; return opened(d); } catch (e) { await forget(); } }
     $('lock').hidden = false;
     $('pass').focus();
     $('lockForm').onsubmit = async ev => {
@@ -87,6 +91,7 @@
         const key = await aesKey(bits);
         const d = await decrypt(key, env);
         await remember(bits, key);
+        KEY = key;
         $('pass').value = '';
         opened(d);
       } catch (e) { $('lockMsg').textContent = 'Wrong passphrase'; $('pass').select(); }
@@ -97,7 +102,7 @@
   function start() {
     $('app').hidden = false;
     $('lockBtn').onclick = async () => { await forget(); location.hash = ''; location.reload(); };
-    $('back').onclick = () => { const r = route(); if (history.length > 1) history.back(); else location.hash = r.date ? '#/m/' + r.date.slice(0, 7) : '#/t'; };
+    $('back').onclick = () => { const r = route(); if (r.view === 'bodyadd') location.hash = '#/b'; else if (history.length > 1) history.back(); else location.hash = r.date ? '#/m/' + r.date.slice(0, 7) : '#/t'; };
     document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => go(b.dataset.v); });
     window.addEventListener('hashchange', render);
     if (window.Chart) {
@@ -123,6 +128,7 @@
   function route() {
     const h = location.hash.replace(/^#\/?/, '').split('/');
     if (h[0] === 'd' && DATA.days[h[1]]) return { view: 'day', date: h[1] };
+    if (h[0] === 'b' && h[1] === 'add') return { view: 'bodyadd', tab: 'body' };
     if (h[0] === 'b') return { view: 'body' };
     if (h[0] === 't' && h[1] === 's' && h[2]) return { view: 'session', id: h[2], tab: 'train' };
     if (h[0] === 't' && h[1] === 'x' && h[2]) return { view: 'exercise', ex: decodeURIComponent(h[2]), tab: 'train' };
@@ -139,7 +145,7 @@
   function render() {
     charts.forEach(c => c.destroy()); charts = [];
     const r = route();
-    const sub = r.view === 'day' || r.view === 'session' || r.view === 'exercise';
+    const sub = r.view === 'day' || r.view === 'session' || r.view === 'exercise' || r.view === 'bodyadd';
     $('back').style.visibility = sub ? 'visible' : 'hidden';
     $('tabs').hidden = r.view === 'day';
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === (r.tab || r.view)));
@@ -148,6 +154,7 @@
     else if (r.view === 'week') renderPeriod(r.from, addDays(r.from, 6), 'week');
     else if (r.view === 'range') renderPeriod(r.from, r.to, 'range');
     else if (r.view === 'body') renderBody();
+    else if (r.view === 'bodyadd') renderBodyAdd();
     else if (r.view === 'train') renderTraining(false);
     else if (r.view === 'session') renderSession(r.id);
     else if (r.view === 'exercise') renderExercise(r.ex);
@@ -363,15 +370,19 @@
 
   function renderBody() {
     const B = DATA.body;
+    const add = `<div class="addbar">${FLASH ? `<div class="flash">${esc(FLASH)}</div>` : '<div></div>'}<button id="bAdd" class="primary">+ Add</button></div>`;
+    FLASH = '';
+    const wireAdd = () => { $('bAdd').onclick = () => { location.hash = '#/b/add'; }; };
     if (!B || !B.entries.length) {
-      $('view').innerHTML = `<div class="summary"><div class="lbl">Body</div><div class="empty">No measurements yet.</div>` +
+      $('view').innerHTML = add + `<div class="summary"><div class="lbl">Body</div><div class="empty">No measurements yet.</div>` +
         `<div class="meta">Weekly: weight, and neck, shoulders, chest, biceps, forearms, waist, hips, thighs, calves. Goal ${B && B.goal ? B.goal.weightKg + ' kg' : ''} lean gain.</div></div>`;
+      wireAdd();
       return;
     }
     const E = B.entries, last = E[E.length - 1];
     const w = B.latest.weightKg, w0 = B.first.weightKg;
     const prevW = last.d.weightKg;
-    const head = `<div class="summary"><div class="lbl">Latest · ${last.weekday.slice(0, 3)} ${fmtShort(last.date)} ${last.date.slice(0, 4)}${last.conditions ? ' · ' + esc(last.conditions) : ''}</div>` +
+    const head = `<div class="summary"><div class="lbl">Latest · ${last.weekday.slice(0, 3)} ${fmtShort(last.date)} ${last.date.slice(0, 4)}${last.conditions ? ' · ' + esc(last.conditions) : ''}${last.biceps ? ' · biceps ' + esc(last.biceps) : ''}</div>` +
       (w ? `<div class="big">${n1(w.value)} <span class="u">kg</span></div>` : '') +
       `<div class="meta">${prevW != null ? `<span>vs last <b>${signed(prevW, 'kg')}</b></span>` : ''}` +
       (w && w0 && w0.date !== w.date ? `<span>since ${fmtShort(w0.date)} <b>${signed(w.value - w0.value, 'kg')}</b></span>` : '') +
@@ -393,10 +404,11 @@
       `<table><colgroup><col><col class="c-k2"><col class="c-k2"></colgroup><thead><tr><th>Date</th><th>kg</th><th>Waist</th></tr></thead><tbody>` +
       E.slice().reverse().map(e => `<tr><td class="item">${e.weekday.slice(0, 3)} ${fmtShort(e.date)} ${e.date.slice(0, 4)}${e.conditions ? `<span class="pl">${esc(e.conditions)}</span>` : ''}</td>` +
         `<td>${e.v.weightKg != null ? n1(e.v.weightKg) : ''}</td><td>${e.v.waist != null ? n1(e.v.waist) : ''}</td></tr>`).join('') + `</tbody></table></section>`;
-    $('view').innerHTML = head + pair + table + hist + `<div class="csv"><button id="bcsv">Body CSV</button></div>`;
+    $('view').innerHTML = add + head + pair + table + hist + `<div class="csv"><button id="bcsv">Body CSV</button></div>`;
+    wireAdd();
     $('bcsv').onclick = () => {
-      const r = [['date', 'time', 'conditions', ...B.fields.map(k => `${k}_${unitOf(B, k)}`), 'note']];
-      E.forEach(e => r.push([e.date, e.time || '', e.conditions || '', ...B.fields.map(k => e.v[k] ?? ''), e.note || '']));
+      const r = [['date', 'time', 'conditions', 'biceps', ...B.fields.map(k => `${k}_${unitOf(B, k)}`), 'note']];
+      E.forEach(e => r.push([e.date, e.time || '', e.conditions || '', e.biceps || '', ...B.fields.map(k => e.v[k] ?? ''), e.note || '']));
       download('arete-body.csv', r);
     };
     // Weight and waist side by side (D021).
@@ -414,6 +426,198 @@
   }
   // Lean gain: a growing waist is the watch item, a shrinking one is good. The sign is always shown too.
   function cls(k, d) { if (d == null || d === 0) return 'qty'; if (k === 'waist') return d > 0 ? 'over' : 'okp'; return ''; }
+
+
+  // ---------- Body: Add form, saves straight to GitHub (D057, D059) ----------
+  // 1) the raw entry goes to arete data/inbox/body-<date>.json (the record; build.js merges it),
+  // 2) the latest site data is fetched, decrypted with this device's key, updated with the SAME
+  //    code the build uses (shared.js), re-encrypted and pushed to arete-site.
+  // The GitHub key is pasted once per device and kept only in this browser (localStorage).
+  const GH = 'https://api.github.com/repos/sanjaykandampully/';
+  const GHKEY = 'arete.gh';
+  const nowIST = () => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()) + ' IST';
+  const istTime = () => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+  function ghErr(status, what) {
+    const e = new Error(
+      status === 0 ? 'no connection, check the internet' :
+      status === 401 ? 'GitHub did not accept the key (wrong, expired or removed). Paste a new one below' :
+      (status === 403 || status === 404) ? `the key cannot write to ${what}. It needs arete and arete-site, Contents read and write` :
+      (status === 409 || status === 422) ? 'someone else saved at the same moment' :
+      `GitHub answered ${status}`);
+    e.status = status; e.conflict = status === 409 || status === 422; return e;
+  }
+  async function gh(method, repo, p, body, accept) {
+    let r;
+    try {
+      r = await fetch(GH + repo + (p ? '/contents/' + p : ''), {
+        method, cache: 'no-store',
+        headers: Object.assign({ Authorization: 'Bearer ' + store.get(GHKEY), Accept: accept || 'application/vnd.github+json' }, body ? { 'Content-Type': 'application/json' } : {}),
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) { throw ghErr(0, repo); }
+    return r;
+  }
+  async function getFile(repo, p) {
+    const r = await gh('GET', repo, p);
+    if (r.status === 404) return null;
+    if (!r.ok) throw ghErr(r.status, repo);
+    const j = await r.json();
+    let text;
+    if (j.content && j.encoding === 'base64') text = new TextDecoder().decode(b64d(j.content.replace(/\s/g, '')));
+    else { // files over 1 MB come without content
+      const r2 = await gh('GET', repo, p, null, 'application/vnd.github.raw+json');
+      if (!r2.ok) throw ghErr(r2.status, repo);
+      text = await r2.text();
+    }
+    return { sha: j.sha, text };
+  }
+  async function putFile(repo, p, text, message, sha) {
+    const body = { message, content: b64e(new TextEncoder().encode(text)) };
+    if (sha) body.sha = sha;
+    const r = await gh('PUT', repo, p, body);
+    if (!r.ok) throw ghErr(r.status, repo);
+    return r.json();
+  }
+  async function testKey() {
+    for (const repo of ['arete', 'arete-site']) { const r = await gh('GET', repo); if (!r.ok) throw ghErr(r.status === 404 ? 403 : r.status, repo); }
+  }
+  async function saveBody(entry, step) {
+    const S = window.AreteShared;
+    step('Saving 1 of 2: your records');
+    const p = `data/inbox/body-${entry.date}.json`;
+    const old = await getFile('arete', p);
+    const raw = Object.assign({}, entry, { source: `Arete app, saved ${nowIST()}` });
+    await putFile('arete', p, JSON.stringify(raw, null, 2) + '\n', `body: ${entry.date} (app)`, old && old.sha);
+    step('Saving 2 of 2: the site');
+    for (let attempt = 0; ; attempt++) {
+      const cur = await getFile('arete-site', 'data.enc.json');
+      if (!cur) throw new Error('the site data file is missing on GitHub');
+      const env = JSON.parse(cur.text);
+      let pub;
+      try { pub = await decrypt(KEY, env); } catch (e) { throw new Error('the passphrase was changed on the computer. Tap Lock, unlock with the new one, then save again'); }
+      pub.body = S.bodySummary(S.upsertBody(S.bodyFromSummary(pub.body), entry));
+      pub.updated = nowIST();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, new TextEncoder().encode(JSON.stringify(pub)));
+      const out = { v: 1, alg: 'AES-GCM', kdf: env.kdf, iter: env.iter, salt: env.salt, iv: b64e(iv), ct: b64e(ct) };
+      try { await putFile('arete-site', 'data.enc.json', JSON.stringify(out), `body: ${entry.date} (app)`, cur.sha); ENV = out; return pub; }
+      catch (e) { if (e.conflict && attempt < 2) continue; throw e; }
+    }
+  }
+
+  function renderBodyAdd() {
+    const S = window.AreteShared;
+    const B = DATA.body;
+    const byDate = {}; B.entries.forEach(e => { byDate[e.date] = e; });
+    const last = B.entries[B.entries.length - 1] || null;
+    const has = k => B.fields.includes(k);
+    const lv = k => { for (let i = B.entries.length - 1; i >= 0; i--) if (B.entries[i].v[k] != null) return n1(B.entries[i].v[k]); return ''; };
+    const inp = k => has(k) ? `<label class="fld"><span>${esc(bl(B, k))} <i>${unitOf(B, k)}</i></span><input id="f_${k}" type="text" inputmode="decimal" autocomplete="off" placeholder="${lv(k) ? 'last ' + lv(k) : ''}"></label>` : '';
+    const singles = ['weightKg', 'neck', 'shoulders', 'chest', 'waist', 'hips'];
+    const pairs = S.BODY_PAIRS.filter(([l, r]) => has(l) || has(r));
+    const extra = B.fields.filter(k => !singles.includes(k) && !pairs.some(p => p.includes(k)));
+    const needPass = KEY && KEY.usages && !KEY.usages.includes('encrypt');
+    const keySet = !!store.get(GHKEY);
+    $('view').innerHTML =
+      `<div class="ptitle">Add measurements</div><div class="hint">Leave out anything you did not measure. Weight in kg, the rest in cm.</div>` +
+      `<form id="bf" class="bform" autocomplete="off">` +
+      `<section class="card fcard"><div class="g2">` +
+        `<label class="fld"><span>Date</span><input id="f_date" type="date" value="${istToday()}" max="${istToday()}"></label>` +
+        `<label class="fld"><span>Time <i>IST</i></span><input id="f_time" type="time" value="${istTime()}"></label></div>` +
+        `<label class="fld"><span>Conditions</span><input id="f_cond" type="text" placeholder="e.g. Sunday morning, before food"></label>` +
+        (last && last.conditions ? `<div class="chips"><button type="button" class="tchip" id="f_same">Same as last: ${esc(last.conditions)}</button></div>` : '') +
+        `<div id="f_exists" class="xnote" hidden></div>` +
+      `</section>` +
+      `<section class="card fcard"><div class="g2">${singles.map(inp).join('')}${extra.map(inp).join('')}</div></section>` +
+      `<section class="card fcard">` +
+        (has('bicepL') || has('bicepR') ? `<div class="segrow"><span>Biceps measured</span><div class="seg" id="f_bic"><button type="button" data-v="flexed">Flexed</button><button type="button" data-v="relaxed">Relaxed</button></div></div>` : '') +
+        pairs.map(([l, r]) => `<div class="g2">${inp(l)}${inp(r)}</div>`).join('') +
+      `</section>` +
+      `<section class="card fcard"><label class="fld"><span>Note <i>optional</i></span><input id="f_note" type="text"></label></section>` +
+      (needPass ? `<section class="card fcard"><label class="fld"><span>Passphrase <i>once on this device, to allow saving</i></span><input id="f_pass" type="password" autocomplete="current-password"></label></section>` : '') +
+      `<section class="card fcard"><div class="segrow"><span>GitHub key</span><span class="tm" id="k_st">${keySet ? 'set on this device' : 'not set on this device'}</span></div>` +
+        `<div id="k_new" ${keySet ? 'hidden' : ''}><div class="krow"><input id="k_in" type="password" placeholder="Paste the Arete (app) key" autocomplete="off"><button type="button" id="k_save">Save key</button></div>` +
+        `<div class="hint">Paste it once per device. It stays in this browser only.</div></div>` +
+        (keySet ? `<div class="krow"><button type="button" class="ghost" id="k_change">Change key</button><button type="button" class="ghost" id="k_del">Remove from this device</button></div>` : '') +
+      `</section>` +
+      `<div id="f_msg" class="fmsg"></div>` +
+      `<button type="submit" id="f_go" class="primary wide">Save</button>` +
+      `</form>`;
+
+    let biceps = null, warned = false;
+    const msg = (t, kind) => { const m = $('f_msg'); m.textContent = t; m.className = 'fmsg' + (kind ? ' ' + kind : ''); };
+    const reset = () => { if (warned) { warned = false; $('f_go').textContent = 'Save'; } };
+    const setBic = v => { biceps = v; document.querySelectorAll('#f_bic button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); };
+    document.querySelectorAll('#f_bic button').forEach(b => { b.onclick = () => { setBic(biceps === b.dataset.v ? null : b.dataset.v); reset(); }; });
+    if ($('f_same')) $('f_same').onclick = () => { $('f_cond').value = last.conditions; reset(); };
+    $('bf').addEventListener('input', reset);
+    // A date that already has an entry: load it, saving replaces it.
+    const loadDate = () => {
+      const e = byDate[$('f_date').value];
+      $('f_exists').hidden = !e;
+      if (!e) return;
+      $('f_exists').textContent = 'This date already has an entry. It is loaded below; saving replaces it.';
+      $('f_time').value = e.time || '';
+      $('f_cond').value = e.conditions || '';
+      $('f_note').value = e.note || '';
+      setBic(e.biceps || null);
+      B.fields.forEach(k => { if ($('f_' + k)) $('f_' + k).value = e.v[k] != null ? e.v[k] : ''; });
+    };
+    $('f_date').onchange = loadDate; loadDate();
+
+    if ($('k_change')) $('k_change').onclick = () => { $('k_new').hidden = false; $('k_in').focus(); };
+    if ($('k_del')) $('k_del').onclick = () => { store.del(GHKEY); renderBodyAdd(); };
+    $('k_save').onclick = async () => {
+      const v = $('k_in').value.trim();
+      if (!v) return msg('Paste the key first.', 'bad');
+      const prev = store.get(GHKEY);
+      store.set(GHKEY, v);
+      msg('Checking the key');
+      try { await testKey(); $('k_in').value = ''; $('k_new').hidden = true; $('k_st').textContent = 'set on this device'; msg('Key works for arete and arete-site.', 'good'); }
+      catch (e) { if (prev) store.set(GHKEY, prev); else store.del(GHKEY); msg('Key not saved: ' + e.message + '.', 'bad'); }
+    };
+
+    $('bf').onsubmit = async ev => {
+      ev.preventDefault();
+      const entry = { date: $('f_date').value };
+      const t = $('f_time').value; if (t) entry.time = t.slice(0, 5);
+      const c = $('f_cond').value.trim(); if (c) entry.conditions = c;
+      if (biceps) entry.biceps = biceps;
+      const bad = [];
+      for (const k of B.fields) {
+        const el = $('f_' + k); if (!el) continue;
+        const s = el.value.trim().replace(',', '.');
+        if (!s) continue;
+        const x = Number(s);
+        if (!isFinite(x)) bad.push(`${bl(B, k)} "${el.value}" is not a number`); else entry[k] = x;
+      }
+      const note = $('f_note').value.trim(); if (note) entry.note = note;
+      const chk = S.bodyEntryCheck(B, entry);
+      const errors = bad.concat(chk.errors.filter(m => !/must be a number/.test(m)));
+      if ((entry.bicepL != null || entry.bicepR != null) && !biceps) errors.push('Pick Flexed or Relaxed for the biceps');
+      const warnings = chk.warnings.filter(m => !/biceps flexed or relaxed/.test(m));
+      if (errors.length) return msg(errors.join('. ') + '.', 'bad');
+      if (!store.get(GHKEY)) return msg('Paste the GitHub key first (below the note).', 'bad');
+      if (warnings.length && !warned) { warned = true; $('f_go').textContent = 'Save anyway'; return msg('Check: ' + warnings.join('. ') + '. Tap Save anyway if it is right.', 'warn'); }
+      const go = $('f_go'); go.disabled = true;
+      try {
+        if (needPass) {
+          const pass = $('f_pass').value;
+          if (!pass) throw new Error('enter the passphrase once so this device can save');
+          const bits = await deriveBits(pass, ENV);
+          const k = await aesKey(bits);
+          try { await decrypt(k, ENV); } catch (e) { throw new Error('wrong passphrase'); }
+          await remember(bits, k); KEY = k;
+        }
+        const pub = await saveBody(entry, s => msg(s));
+        DATA = pub; DATES = Object.keys(DATA.days).sort();
+        FLASH = `Saved ${fmtShort(entry.date)}. Other devices show it in about a minute.`;
+        location.hash = '#/b';
+      } catch (e) {
+        msg('Save failed: ' + e.message + '. Try again.', 'bad');
+      } finally { go.disabled = false; }
+    };
+  }
 
   // ---------- Phase 4: training ----------
   const T = () => DATA.training || { sessions: [], progress: {}, exercises: [] };
