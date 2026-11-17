@@ -151,6 +151,7 @@
     if (h[0] === 'b') return { view: 'body' };
     if (h[0] === 't' && h[1] === 's' && h[2]) return { view: 'session', id: h[2], tab: 'train' };
     if (h[0] === 't' && h[1] === 'x' && h[2]) { let ex = h[2]; try { ex = decodeURIComponent(h[2]); } catch (e) { /* keep raw */ } return { view: 'exercise', ex, tab: 'train' }; }
+    if (h[0] === 't' && h[1] === 'g' && h[2]) { let g = h[2]; try { g = decodeURIComponent(h[2]); } catch (e) { /* keep raw */ } return { view: 'train', group: g }; }
     if (h[0] === 't') return { view: 'train' };
     if (h[0] === 'm' && /^\d{4}-\d{2}$/.test(h[1])) return { view: 'month', month: h[1] };
     if (h[0] === 'w' && isD(h[1])) return { view: 'week', from: monday(h[1]) };
@@ -176,7 +177,7 @@
     else if (r.view === 'range') renderPeriod(r.from, r.to, 'range');
     else if (r.view === 'body') renderBody();
     else if (r.view === 'bodyadd') renderBodyAdd(r.date);
-    else if (r.view === 'train') renderTraining(false);
+    else if (r.view === 'train') renderTraining(false, r.group);
     else if (r.view === 'session') renderSession(r.id);
     else if (r.view === 'exercise') renderExercise(r.ex);
     else renderMonth(r.month);
@@ -205,22 +206,34 @@
   const pill = (label, value) => `<span class="pill">${label}${value != null && value !== '' ? ` <b>${value}</b>` : ''}</span>`;
   const pct = x => Math.max(0, Math.min(100, x * 100)).toFixed(1);
   const fmtLong = d => `${WD[dow(d)]} ${fmtShort(d)} ${d.slice(0, 4)}`;
+  const protTxt = t => t.proteinMax ? `${t.proteinMin} to ${t.proteinMax} g` : `${t.proteinMin} g or more`;
+  const phaseOn = d => (DATA.phases || []).filter(p => p.from <= d).pop() || null; // goal phase for a date (D078)
   const macroLine = t => `<b>${n0(t.kcal)}</b> kcal${sep}<i class="mp">P</i> ${n0(t.p)}${sep}<i class="mc">C</i> ${n0(t.c)}${sep}<i class="mf">F</i> ${n0(t.f)}`;
 
-  // kcal and protein against the target: a bar with the target marked on it.
+  // kcal, protein, and carbs and fat when the phase sets them, against the target (D078).
   function gaugesHTML(v, t) {
     if (!t) return '';
     const over = v.kcal > t.kcal, dk = Math.round(v.kcal - t.kcal);
     const kTxt = dk === 0 ? `on the ${n0(t.kcal)} target` : `${n0(Math.abs(dk))} ${dk > 0 ? 'over' : 'under'} the ${n0(t.kcal)} target`;
-    const scale = t.proteinMax * 1.25;
+    const pMax = t.proteinMax || null;
+    const scale = (pMax || t.proteinMin * 1.2) * 1.25;
     const low = v.p < t.proteinMin;
-    const pTxt = low ? `${Math.ceil(t.proteinMin - v.p)} g short of ${t.proteinMin}` : v.p > t.proteinMax ? `above ${t.proteinMin} to ${t.proteinMax} g` : `within ${t.proteinMin} to ${t.proteinMax} g`;
+    const pTxt = low ? `${Math.ceil(t.proteinMin - v.p)} g short of ${t.proteinMin}` : pMax && v.p > pMax ? `above ${protTxt(t)}` : pMax ? `within ${protTxt(t)}` : `${t.proteinMin} g reached`;
+    const bandW = pMax ? (pMax - t.proteinMin) / scale : 1 - t.proteinMin / scale;
+    const mac = (name, val, tg, c) => {
+      if (!tg) return '';
+      const o = val > tg, d = Math.round(val - tg);
+      const txt = d === 0 ? `on the ${tg} g target` : `${Math.abs(d)} g ${d > 0 ? 'over' : 'under'} ${tg} g`;
+      return `<div class="g"><div class="gl"><span>${name}</span><span class="${o ? 'warn' : ''}">${txt}</span></div>` +
+        `<div class="gauge"><div class="fill ${o ? 'warn' : c}" style="width:${pct(val / (tg * 1.5))}%"></div><i class="tick" style="left:66.667%"></i></div></div>`;
+    };
     return `<div class="gauges">` +
       `<div class="g"><div class="gl"><span>Calories</span><span class="${over ? 'warn' : ''}">${kTxt}</span></div>` +
         `<div class="gauge"><div class="fill${over ? ' warn' : ''}" style="width:${pct(v.kcal / (t.kcal * 1.5))}%"></div><i class="tick" style="left:66.667%"></i></div></div>` +
       `<div class="g"><div class="gl"><span>Protein</span><span class="${low ? 'warn' : 'good'}">${pTxt}</span></div>` +
-        `<div class="gauge"><i class="band" style="left:${pct(t.proteinMin / scale)}%;width:${pct((t.proteinMax - t.proteinMin) / scale)}%"></i>` +
-        `<div class="fill p" style="width:${pct(v.p / scale)}%"></div></div></div></div>`;
+        `<div class="gauge"><i class="band" style="left:${pct(t.proteinMin / scale)}%;width:${pct(bandW)}%"></i>` +
+        `<div class="fill p" style="width:${pct(v.p / scale)}%"></div></div></div>` +
+      mac('Carbs', v.c, t.carbs, 'c') + mac('Fat', v.f, t.fat, 'f') + `</div>`;
   }
 
   // Macro split: ring plus each macro's share of the calories.
@@ -241,6 +254,7 @@
   }
 
   // ---------- shared period pieces ----------
+  const days0 = (from, to) => DATES.filter(d => d >= from && d <= to).map(d => DATA.days[d]);
   function daysIn(from, to) { return DATES.filter(d => d >= from && d <= to).map(d => DATA.days[d]); }
 
   function stats(days) {
@@ -261,7 +275,9 @@
   function summaryHTML(id, s, from, to) {
     if (!s.n) return `<section class="card hero"><div class="empty">No food logged in this period.</div></section>`;
     const t = s.tgt;
-    return `<section class="card hero"><div class="cap">Daily average over ${s.n} logged day${s.n > 1 ? 's' : ''}</div>` +
+    const phs = [...new Set(days0(from, to).map(d => d.target && d.target.phase).filter(Boolean))];
+    const cmp = phs.length > 1 && t && t.phase ? `. Bars compare with the ${esc(t.phase)} targets` : '';
+    return `<section class="card hero"><div class="cap">Daily average over ${s.n} logged day${s.n > 1 ? 's' : ''}${cmp}</div>` +
       `<div class="macros">${macroLine(s.avg)}</div>${gaugesHTML(s.avg, t)}${splitHTML(id + 'd', s.avg)}` +
       `<div class="pills">${t ? pill('Over kcal target', `${s.overKcal} of ${s.n}`) + pill(`Protein ${t.proteinMin} g or more`, `${s.proteinHit} of ${s.n}`) : ''}` +
       `${pill('Trained', `${s.trained} of ${s.n}`)}${s.avgFast ? pill('Average fast', s.avgFast) : ''}</div>` +
@@ -272,7 +288,7 @@
     if (!s.n) return '';
     const t = s.tgt;
     return `<section class="card chart"><h3><span>Calories per day</span><span class="aside">${t ? `dashed line: ${n0(t.kcal)} target` : ''}</span></h3><div class="cbox"><canvas id="${id}k"></canvas></div></section>` +
-      `<section class="card chart"><h3><span>Protein per day</span><span class="aside">${t ? `band: ${t.proteinMin} to ${t.proteinMax} g` : ''}</span></h3><div class="cbox"><canvas id="${id}p"></canvas></div></section>`;
+      `<section class="card chart"><h3><span>Protein per day</span><span class="aside">${t ? `band: ${protTxt(t)}` : ''}</span></h3><div class="cbox"><canvas id="${id}p"></canvas></div></section>`;
   }
 
   function drawPeriodCharts(id, days, s, labelFn) {
@@ -281,7 +297,7 @@
     const labels = days.map(labelFn);
     const scales = { x: { grid: { display: false }, border: { display: false }, ticks: { maxRotation: 0, autoSkip: true, autoSkipPadding: 6 } },
       y: { beginAtZero: true, grid: { color: COL.grid }, border: { display: false }, ticks: { maxTicksLimit: 6 } } };
-    const flat = (v, extra) => Object.assign({ type: 'line', data: days.map(d => (d.target ? v(d.target) : null)), borderWidth: 1.2, pointRadius: 0, pointHitRadius: 0, order: 0, spanGaps: true }, extra);
+    const flat = (v, extra) => Object.assign({ type: 'line', data: days.map(d => (d.target ? v(d.target) : null)), borderWidth: 1.2, pointRadius: 0, pointHitRadius: 0, order: 0, spanGaps: true, stepped: 'middle' }, extra);
     const bars = (data, colors) => ({ type: 'bar', data, backgroundColor: colors, borderRadius: 5, borderSkipped: 'bottom', maxBarThickness: 22, categoryPercentage: .82, barPercentage: .88, order: 1 });
     const opts = unit => ({ responsive: true, maintainAspectRatio: false, scales, interaction: { mode: 'index', intersect: false },
       plugins: { tooltip: { filter: c => c.dataset.type === 'bar', callbacks: { label: c => `${n0(c.parsed.y)} ${unit}` } } },
@@ -290,18 +306,19 @@
     charts.push(new Chart($(id + 'k'), { data: { labels, datasets: [
       bars(days.map(d => d.totals.kcal), days.map(d => (d.target && d.totals.kcal > d.target.kcal ? COL.warn : COL.bar))),
       flat(t => t.kcal, { borderColor: COL.target, borderDash: [4, 4] })] }, options: opts('kcal') }));
-    // Protein: the target range is a band; days under the minimum are faded.
+    // Protein: the target range is a band (to the top when the phase has no maximum); days under the minimum are faded.
+    const pCeil = Math.max(...days.map(d => d.totals.p), ...days.map(d => (d.target ? d.target.proteinMax || d.target.proteinMin : 0))) * 1.1;
     charts.push(new Chart($(id + 'p'), { data: { labels, datasets: [
       bars(days.map(d => d.totals.p), days.map(d => (d.target && d.totals.p < d.target.proteinMin ? COL.pDim : COL.p))),
       flat(t => t.proteinMin, { borderColor: COL.bandLine, fill: '+1', backgroundColor: COL.band }),
-      flat(t => t.proteinMax, { borderColor: COL.bandLine })] }, options: opts('g protein') }));
+      flat(t => t.proteinMax || pCeil, { borderColor: COL.bandLine, segment: { borderColor: c => (days[c.p0DataIndex].target && days[c.p0DataIndex].target.proteinMax ? COL.bandLine : 'transparent') } })] }, options: opts('g protein') }));
   }
 
   function dayTableHTML(days) {
     if (!days.length) return '';
     const rows = days.map(d => `<tr data-go="#/d/${d.date}"><td class="item">${d.weekday.slice(0, 3)} ${fmtShort(d.date)}<span class="pl">${d.workout.trained ? esc(shortLabel(d.workout.area) || 'Trained') : 'Rest'}</span></td>` +
       `<td class="${d.target && d.totals.kcal > d.target.kcal ? 'warn' : ''}">${n0(d.totals.kcal)}</td><td class="${d.target ? (d.totals.p < d.target.proteinMin ? '' : 'good') : ''}">${n0(d.totals.p)}</td>` +
-      `<td>${n0(d.totals.c)}</td><td>${n0(d.totals.f)}</td><td class="q">${d.fast ? d.fast.text.replace(' hrs', '') : ''}</td></tr>`).join('');
+      `<td class="${d.target && d.target.carbs && d.totals.c > d.target.carbs ? 'warn' : ''}">${n0(d.totals.c)}</td><td class="${d.target && d.target.fat && d.totals.f > d.target.fat ? 'warn' : ''}">${n0(d.totals.f)}</td><td class="q">${d.fast ? d.fast.text.replace(' hrs', '') : ''}</td></tr>`).join('');
     return `<section class="card"><h3><span>Days</span><span class="aside">tap a day to open it</span></h3><table class="days"><colgroup><col><col class="c-k2"><col class="c-m"><col class="c-m"><col class="c-m"><col class="c-qty"></colgroup>` +
       `<thead><tr><th>Day</th><th>kcal</th><th>P</th><th>C</th><th>F</th><th>Fast</th></tr></thead><tbody>${rows}</tbody></table></section>`;
   }
@@ -355,7 +372,7 @@
     const days = daysIn(first, last); const s = stats(days);
     const t = s.tgt;
     $('view').innerHTML =
-      phead(MONTHS[mo - 1], String(y), navBtn('l', 'Previous month', prevM < minM ? '' : '#/m/' + prevM) + navBtn('r', 'Next month', nextM > maxM ? '' : '#/m/' + nextM)) +
+      phead(MONTHS[mo - 1], (ph => String(y) + (ph ? `, ${esc(ph.name)}` : ''))(phaseOn(last < istToday() ? last : istToday())), navBtn('l', 'Previous month', prevM < minM ? '' : '#/m/' + prevM) + navBtn('r', 'Next month', nextM > maxM ? '' : '#/m/' + nextM)) +
       `<div class="cal">${cells}</div>` +
       (t ? `<div class="legend"><span><i class="dot warn"></i>over the ${n0(t.kcal)} kcal target</span><span><i class="dot good"></i>protein ${t.proteinMin} g or more</span></div>` : '') +
       summaryHTML('mc', s, first, last) + pantryHTML() + chartsHTML('mc', s) +
@@ -424,8 +441,13 @@
   const bl = (B, k) => (B.labels && B.labels[k]) || k;
   const unitOf = (B, k) => k === 'weightKg' ? 'kg' : 'cm';
   const signed = (x, u) => x == null ? '' : `${x > 0 ? '+' : x < 0 ? '−' : '±'}${n1(Math.abs(x))}${u ? ' ' + u : ''}`;
-  // Lean gain: a growing waist is the one to watch, a shrinking one is good. The sign is always shown too.
-  function cls(k, d) { if (d == null || d === 0) return 'q'; if (k === 'waist') return d > 0 ? 'warn' : 'good'; return ''; }
+  // Waist: shrinking is good. Weight follows the goal phase (D078): down is good on a cut, up on a gain. The sign is always shown.
+  function cls(k, d, ph) {
+    if (d == null || d === 0) return 'q';
+    if (k === 'waist') return d > 0 ? 'warn' : 'good';
+    if (k === 'weightKg' && ph && (ph.type === 'cut' || ph.type === 'gain')) return (ph.type === 'cut' ? d < 0 : d > 0) ? 'good' : 'warn';
+    return '';
+  }
 
   function renderBody() {
     const B = DATA.body;
@@ -434,22 +456,33 @@
     const addBtn = `<button class="btn primary" data-go="#/b/add">Add measurements</button>`;
     if (!B || !B.entries.length) {
       const parts = B ? [...new Set(B.fields.map(k => bl(B, k).replace(/ [LR]$/, '').toLowerCase()))].join(', ') : '';
-      $('view').innerHTML = phead('Body', B && B.goal ? `Goal: ${B.goal.weightKg} kg, lean gain` : '') + flash +
-        `<section class="card hero"><div class="empty">No measurements yet.</div><div class="cap">Once a week: ${esc(parts)}.</div><div class="acts">${addBtn}</div></section>`;
+      const ph0 = phaseOn(istToday());
+      $('view').innerHTML = phead('Body', ph0 && ph0.goalWeightKg ? `${esc(ph0.name)}: ${ph0.goalWeightKg} kg${ph0.goalBy ? ' by ' + fmtLong(ph0.goalBy) : ''}` : '') + flash +
+        `<section class="card hero"><div class="empty">No measurements yet.</div><div class="cap">Every 15 days: ${esc(parts)}.</div><div class="acts">${addBtn}</div></section>`;
       return;
     }
     const E = B.entries, last = E[E.length - 1];
     const w = B.latest.weightKg, w0 = B.first.weightKg;
-    let goal = '';
-    if (w && B.goal) {
-      const g = B.goal.weightKg, start = Math.min(w0.value, w.value, g - 0.1);
-      const done = B.toGoalKg <= 0;
-      goal = `<div class="gauges one"><div class="g"><div class="gl"><span>Goal ${g} kg</span><span class="${done ? 'good' : ''}">${done ? 'reached' : n1(B.toGoalKg) + ' kg to go'}</span></div>` +
-        `<div class="gauge"><div class="fill${done ? ' good' : ''}" style="width:${pct(Math.max(0.02, (w.value - start) / (g - start)))}%"></div><i class="tick" style="left:100%"></i></div></div></div>`;
+    // Goal from the current phase (D078): progress from the weight at the phase start, kg to go, pace needed.
+    const ph = phaseOn(istToday());
+    let goal = '', pace = '', sub = '';
+    if (ph && ph.goalWeightKg) {
+      const g = ph.goalWeightKg, lose = ph.type === 'cut';
+      sub = `${esc(ph.name)}: ${g} kg${ph.goalBy ? ' by ' + fmtLong(ph.goalBy) : ''}`;
+      if (w) {
+        const ws = E.filter(e => e.v.weightKg != null);
+        const startE = ws.filter(e => e.date <= ph.from).pop() || ws.find(e => e.date >= ph.from) || ws[ws.length - 1];
+        const toGo = lose ? w.value - g : g - w.value, done = toGo <= 0;
+        const span = Math.abs(startE.v.weightKg - g) || 1;
+        const daysLeft = ph.goalBy ? (Date.parse(ph.goalBy) - Date.parse(istToday())) / 864e5 : null;
+        if (!done && daysLeft > 0) pace = pill('Needed', `${n1(toGo / (daysLeft / 7))} kg a week`);
+        goal = `<div class="gauges one"><div class="g"><div class="gl"><span>Goal ${g} kg</span><span class="${done ? 'good' : ''}">${done ? 'reached' : `${n1(toGo)} kg to ${lose ? 'lose' : 'gain'}`}</span></div>` +
+          `<div class="gauge"><div class="fill${done ? ' good' : ''}" style="width:${pct(done ? 1 : Math.max(0.02, 1 - toGo / span))}%"></div><i class="tick" style="left:100%"></i></div></div></div>`;
+      }
     }
     const head = `<section class="card hero"><div class="cap">Latest, ${fmtLong(last.date)}</div>` +
       (w ? `<div class="big">${n1(w.value)}<span class="u">kg</span></div>` : '') + goal +
-      `<div class="pills">${last.d.weightKg != null ? pill('Since last', signed(last.d.weightKg, 'kg')) : ''}` +
+      `<div class="pills">${pace}${last.d.weightKg != null ? pill('Since last', signed(last.d.weightKg, 'kg')) : ''}` +
       (w && w0 && w0.date !== w.date ? pill(`Since ${fmtShort(w0.date)}`, signed(w.value - w0.value, 'kg')) : '') +
       (B.latest.waist ? pill('Waist', n1(B.latest.waist.value) + ' cm') : '') +
       (last.conditions ? pill(esc(last.conditions)) : '') + (last.biceps ? pill('Biceps', esc(last.biceps)) : '') + `</div>` +
@@ -460,17 +493,17 @@
       const L = B.latest[k], F = B.first[k], u = unitOf(B, k);
       const dPrev = E.slice().reverse().find(e => e.v[k] != null).d[k];
       const dFirst = F.date !== L.date ? L.value - F.value : null;
-      return `<tr><td class="item">${esc(bl(B, k))}</td><td>${n1(L.value)}</td><td class="${cls(k, dPrev)}">${signed(dPrev)}</td>` +
-        `<td class="${cls(k, dFirst)}">${signed(dFirst)}</td><td class="q">${u}</td></tr>`;
+      return `<tr><td class="item">${esc(bl(B, k))}</td><td>${n1(L.value)}<span class="u">${u}</span></td><td class="${cls(k, dPrev, ph)}">${signed(dPrev)}</td>` +
+        `<td class="${cls(k, dFirst, ph)}">${signed(dFirst)}</td></tr>`;
     }).join('');
     const table = `<section class="card"><h3><span>Measurements</span><span class="aside">change since last and first</span></h3>` +
-      `<table><colgroup><col><col class="c-k2"><col class="c-k2"><col class="c-k2"><col class="c-u"></colgroup>` +
-      `<thead><tr><th>Part</th><th>Now</th><th>Last</th><th>First</th><th></th></tr></thead><tbody>${rows}</tbody></table></section>`;
+      `<table><colgroup><col><col class="c-qty2"><col class="c-k2"><col class="c-k2"></colgroup>` +
+      `<thead><tr><th>Part</th><th>Now</th><th>vs last</th><th>vs first</th></tr></thead><tbody>${rows}</tbody></table></section>`;
     const hist = `<section class="card"><h3><span>History</span><span class="aside">tap an entry to view or change it</span></h3>` +
       `<table class="days"><colgroup><col><col class="c-k2"><col class="c-k2"></colgroup><thead><tr><th>Date</th><th>kg</th><th>Waist</th></tr></thead><tbody>` +
       E.slice().reverse().map(e => `<tr data-go="#/b/add/${e.date}"><td class="item">${fmtLong(e.date)}${e.conditions ? `<span class="pl">${esc(e.conditions)}</span>` : ''}</td>` +
         `<td>${e.v.weightKg != null ? n1(e.v.weightKg) : ''}</td><td>${e.v.waist != null ? n1(e.v.waist) : ''}</td></tr>`).join('') + `</tbody></table></section>`;
-    $('view').innerHTML = phead('Body', B.goal ? `Goal: ${B.goal.weightKg} kg, lean gain` : '') + flash + head + pair + table + hist +
+    $('view').innerHTML = phead('Body', sub) + flash + head + pair + table + hist +
       `<div class="acts end"><button class="btn sm" id="bcsv">Body CSV</button></div>`;
     $('bcsv').onclick = () => {
       const r = [['date', 'time', 'conditions', 'biceps', ...B.fields.map(k => `${k}_${unitOf(B, k)}`), 'note']];
@@ -487,7 +520,9 @@
           scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 4 } }, y: { grid: { color: COL.grid }, border: { display: false }, grace: '5%', ticks: { maxTicksLimit: 5 } } } } }));
     };
     const wp = E.filter(e => e.v.weightKg != null);
-    lineChart('bw', 'weightKg', B.goal ? [{ label: 'Goal', data: wp.map(() => B.goal.weightKg), borderColor: COL.good, borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0 }] : []);
+    // Goal line follows the phase each entry falls in (70 kg in the gain, 65 kg in the cut).
+    const gl = wp.map(e => { const p = phaseOn(e.date); return p ? p.goalWeightKg : null; });
+    lineChart('bw', 'weightKg', gl.some(x => x != null) ? [{ label: 'Goal', data: gl, borderColor: COL.good, borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, stepped: true }] : []);
     lineChart('bwa', 'waist');
   }
 
@@ -699,26 +734,71 @@
   // ---------- training ----------
   const T = () => DATA.training || { sessions: [], progress: {}, exercises: [] };
 
-  function renderTraining(showAll) {
+  // Day type from a session label, by the muscles in it, so "Chest/Biceps/Back" and "Chest/Back/Biceps" are one type (D080).
+  const MUSC = ['Chest', 'Shoulders', 'Back', 'Biceps', 'Triceps', 'Legs', 'Core'];
+  const MWORD = { chest: 'Chest', shoulder: 'Shoulders', shoulders: 'Shoulders', back: 'Back', bicep: 'Biceps', biceps: 'Biceps', tricep: 'Triceps', triceps: 'Triceps', leg: 'Legs', legs: 'Legs', core: 'Core', abs: 'Core' };
+  function dayType(label) {
+    if (!label) return 'Other';
+    const parts = label.replace(/^Gym\s*\W\s*/, '').split(/\s*[\/,&+]\s*/).map(w => MWORD[w.toLowerCase().trim()] || null);
+    if (!parts.length || parts.some(x => !x)) return label.trim();
+    return [...new Set(parts)].sort((x, y) => MUSC.indexOf(x) - MUSC.indexOf(y)).join('/');
+  }
+  const exKind = p => p.type === 'time' ? 'time' : p.type === 'level' ? 'level' : p.points.some(x => x.topKg > 0) ? 'weight' : 'reps';
+  // One number per session to compare: e1RM for weights, else top level, longest hold or most reps.
+  const exMetric = (pt, kind) => kind === 'weight' ? (pt.e1rm ?? pt.topKg) : kind === 'level' ? pt.topLevel : kind === 'time' ? pt.maxSecs : pt.maxReps;
+  const bestTxt = (pt, kind) => kind === 'weight' ? (pt.topKg > 0 ? `${n1(pt.topKg)} × ${pt.topReps}` : '') : kind === 'level' ? (pt.topLevel != null ? `L${n1(pt.topLevel)} × ${pt.topLevelReps}` : '')
+    : kind === 'time' ? (pt.maxSecs ? `${pt.maxSecs} s` : '') : (pt.maxReps ? `${pt.maxReps} reps` : '');
+  const setTxt = (x, st) => x.type === 'time' ? `${st.secs ?? ''} s` : st.kg === 0 ? `BW × ${st.reps ?? ''}` : st.kg != null ? `${n1(st.kg)} × ${st.reps ?? ''}` : st.level != null ? `L${n1(st.level)} × ${st.reps ?? ''}` : `${st.reps ?? ''} reps`;
+
+  function renderTraining(showAll, group) {
     const t = T(); const S = t.sessions;
+    const counts = {};
+    S.forEach(s => { const k = dayType(s.label); counts[k] = (counts[k] || 0) + 1; });
+    const types = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const sel = group && counts[group] ? group : null;
+    const SS = sel ? S.filter(s => dayType(s.label) === sel) : S;
     const from30 = addDays(istToday(), -29);
-    const n30 = S.filter(s => s.date >= from30).length;
-    const detailed = S.filter(s => s.exercises.length).length;
-    const groups = [...new Set(t.exercises.map(x => x.area || 'Other'))];
-    const opts = groups.map(g => `<optgroup label="${esc(g)}">` + t.exercises.filter(x => (x.area || 'Other') === g)
-      .map(x => `<option value="${esc(x.ex)}">${esc(x.name)} (${x.sessions})</option>`).join('') + '</optgroup>').join('');
-    const list = (showAll ? S : S.slice(0, 40)).map(s => `<tr data-go="#/t/s/${s.id}"><td class="item">${esc(s.label || 'Workout')}` +
+    const chips = `<div class="chiprow">` + [`<button class="btn sm${sel ? '' : ' on'}" data-go="#/t">All</button>`,
+      ...types.map(([k, n]) => `<button class="btn sm${sel === k ? ' on' : ''}" data-go="#/t/g/${encodeURIComponent(k)}">${esc(k)}<span class="cnt">${n}</span></button>`)].join('') + `</div>`;
+    const hero = `<section class="card hero">${chips}<div class="pills">${pill('Last 30 days', SS.filter(s => s.date >= from30).length)}${pill(sel ? 'Sessions' : 'All sessions', SS.length)}` +
+      (SS.length ? pill('Last', fmtShort(SS[0].date)) : '') + `</div></section>`;
+
+    // What to beat: the last session of the chosen day type, set by set.
+    let beat = '';
+    const lastS = sel ? SS.find(s => s.exercises.length) : null;
+    if (lastS) {
+      const rows = lastS.exercises.map(x => {
+        const work = x.sets.filter(st => !st.warmup);
+        const best = x.top && x.top.kg > 0 ? `${n1(x.top.kg)} × ${x.top.reps}` : x.topLevel ? `L${n1(x.topLevel.level)} × ${x.topLevel.reps}` : '';
+        return `<tr data-go="#/t/x/${encodeURIComponent(x.ex)}"><td class="item">${esc(x.name)}<span class="pl">${work.map(st => setTxt(x, st)).join(', ')}</span></td><td>${best}</td></tr>`;
+      }).join('');
+      beat = `<section class="card"><h3><span>What to beat</span><span class="aside">last ${esc(sel)} day, ${fmtLong(lastS.date)}</span></h3>` +
+        `<table class="days"><colgroup><col><col class="c-qty2"></colgroup><thead><tr><th>Exercise and sets</th><th>Best set</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    }
+
+    // Exercises: last best and change since the session before (any day type).
+    const exIds = [];
+    SS.forEach(s => s.exercises.forEach(x => { if (!exIds.includes(x.ex)) exIds.push(x.ex); }));
+    const exRows = (sel ? exIds : t.exercises.map(x => x.ex).filter(id => exIds.includes(id))).map(id => {
+      const p = t.progress[id]; if (!p) return '';
+      const kind = exKind(p), pts = p.points, L = pts[pts.length - 1], P = pts[pts.length - 2];
+      const d = P && exMetric(L, kind) != null && exMetric(P, kind) != null ? exMetric(L, kind) - exMetric(P, kind) : null;
+      const chg = d == null ? '' : `<span class="${d > 0 ? 'good' : d < 0 ? 'warn' : 'q'}">${d > 0 ? '▲' : d < 0 ? '▼' : '='}${d ? ' ' + n1(Math.abs(d)) : ''}</span>`;
+      return `<tr data-go="#/t/x/${encodeURIComponent(id)}"><td class="item">${esc(p.name)}<span class="pl">${sel ? '' : esc(p.area || '') + ', '}${fmtShort(L.date)}, ${pts.length} session${pts.length > 1 ? 's' : ''}</span></td>` +
+        `<td>${bestTxt(L, kind)}</td><td>${chg}</td></tr>`;
+    }).join('');
+    const exCard = exRows ? `<section class="card"><h3><span>Exercises</span><span class="aside">tap one for its progress</span></h3>` +
+      `<table class="days"><colgroup><col><col class="c-qty2"><col class="c-k2"></colgroup><thead><tr><th>Exercise</th><th>Last best</th><th>Change</th></tr></thead><tbody>${exRows}</tbody></table>` +
+      `<div class="xnote">Change compares the last session with the one before: estimated one-rep max (e1RM) for weights, otherwise level, hold time or reps.</div></section>` : '';
+
+    const list = (showAll ? SS : SS.slice(0, 20)).map(s => `<tr data-go="#/t/s/${s.id}"><td class="item">${esc(s.label || 'Workout')}` +
       `<span class="pl">${fmtLong(s.date)}${s.time ? ', ' + esc(s.time) : ''}</span></td>` +
       `<td>${s.totals.exercises || ''}</td><td>${s.totals.sets || ''}</td><td>${s.totals.volume ? n0(s.totals.volume) : ''}</td></tr>`).join('');
-    $('view').innerHTML = phead('Training', S.length ? `Last session ${fmtLong(S[0].date)}` : '') +
-      `<section class="card hero"><div class="pills first">${pill('Last 30 days', n30)}${pill('All sessions', S.length)}${pill('With sets', detailed)}</div>` +
-      (opts ? `<label class="pick">Progress for one exercise<select id="exsel"><option value="">Choose an exercise</option>${opts}</select></label>` :
-        `<div class="cap">Exercise progress appears here once the workout history is imported.</div>`) + `</section>` +
-      (S.length ? `<section class="card"><h3><span>Sessions</span><span class="aside">tap one for the sets</span></h3><table class="days"><colgroup><col><col class="c-m"><col class="c-m"><col class="c-k2"></colgroup>` +
+    $('view').innerHTML = phead('Training', S.length ? `Last session ${fmtLong(S[0].date)}` : '') + hero + beat + exCard +
+      (SS.length ? `<section class="card"><h3><span>Sessions</span><span class="aside">tap one for the sets</span></h3><table class="days"><colgroup><col><col class="c-m"><col class="c-m"><col class="c-k2"></colgroup>` +
       `<thead><tr><th>Session</th><th>Ex</th><th>Sets</th><th>Vol kg</th></tr></thead><tbody>${list}</tbody></table></section>` : `<section class="card hero"><div class="empty">No workouts yet.</div></section>`) +
-      (!showAll && S.length > 40 ? `<div class="acts end"><button class="btn sm" id="tall">Show all ${S.length}</button></div>` : '');
-    if ($('exsel')) $('exsel').onchange = e => { if (e.target.value) location.hash = '#/t/x/' + encodeURIComponent(e.target.value); };
-    if ($('tall')) $('tall').onclick = () => { renderTraining(true); wire(); };
+      (!showAll && SS.length > 20 ? `<div class="acts end"><button class="btn sm" id="tall">Show all ${SS.length}</button></div>` : '');
+    if ($('tall')) $('tall').onclick = () => { renderTraining(true, sel); wire(); };
   }
 
   function renderSession(id) {
